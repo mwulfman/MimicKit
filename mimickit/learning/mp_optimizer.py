@@ -1,12 +1,6 @@
-import typing as tp
-
 import torch
 
 import util.mp_util as mp_util
-
-
-LossFactory = tp.Callable[[], torch.Tensor]
-
 
 class MPOptimizer():
     CHECK_SYNC_STEPS = 1000
@@ -15,12 +9,6 @@ class MPOptimizer():
         self._param_list = param_list
         self._grad_clip = float(config.get("grad_clip", 0.0))
         self._optimizer = self._build_optimizer(config, param_list)
-        self._use_mixed_precision = bool(config.get("use_mixed_precision", False))
-        self._amp_dtype = self._parse_amp_dtype(config.get("mixed_precision_type", "fp16"))
-
-        use_grad_scaler = self._use_mixed_precision and self._amp_dtype == torch.float16
-        self._grad_scaler = torch.cuda.amp.GradScaler(enabled=use_grad_scaler)
-
         self._steps = 0
         
         if (mp_util.enable_mp()):
@@ -29,25 +17,9 @@ class MPOptimizer():
         self.sync()
         return
     
-    def step(self, loss_or_factory: torch.Tensor | LossFactory) -> torch.Tensor:
+    def step(self, loss):
         self._optimizer.zero_grad()
-
-        if callable(loss_or_factory):
-            with torch.amp.autocast(
-                enabled=self._use_mixed_precision,
-                dtype=self._amp_dtype,
-            ):
-                loss = loss_or_factory()
-        else:
-            loss = loss_or_factory
-
-        loss = loss.float()
-
-        if (self._grad_scaler.is_enabled()):
-            self._grad_scaler.scale(loss).backward()
-            self._grad_scaler.unscale_(self._optimizer)
-        else:
-            loss.backward()
+        loss.backward()
         
         if (mp_util.enable_mp()):
             self._aggregate_mp_grads()
@@ -55,11 +27,7 @@ class MPOptimizer():
         if (self._enable_grad_clip()):
             self._clip_grads(self._grad_clip)
 
-        if (self._grad_scaler.is_enabled()):
-            self._grad_scaler.step(self._optimizer)
-            self._grad_scaler.update()
-        else:
-            self._optimizer.step()
+        self._optimizer.step()
         
         if (mp_util.enable_mp() and (self.get_steps() % self.CHECK_SYNC_STEPS == 0)):
             assert(self._check_synced()), "Network parameters desynchronized"
@@ -77,14 +45,6 @@ class MPOptimizer():
                 param.copy_(global_param)
         return
 
-    def _parse_amp_dtype(self, mixed_precision_type):
-        if (mixed_precision_type == "fp16"):
-            return torch.float16
-        elif (mixed_precision_type == "bf16"):
-            return torch.bfloat16
-        else:
-            assert(False), "Unsupported AMP type: " + mixed_precision_type
-    
     def _build_optimizer(self, config, param_list):
         lr = float(config["learning_rate"])
         weight_decay = float(config.get("weight_decay", 0.0))

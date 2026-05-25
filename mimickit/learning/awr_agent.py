@@ -189,12 +189,10 @@ class AWRAgent(base_agent.BaseAgent):
 
         for i in range(steps):
             batch = self._exp_buffer.sample(batch_size)
-            loss_info = None
-            def loss_factory():
-                nonlocal loss_info
+            with torch.amp.autocast(device_type="cuda", enabled=self._use_mixed_precision, dtype=torch.bfloat16):
                 loss_info = self._compute_critic_loss(batch)
-                return loss_info["critic_loss"]
-            self._critic_optimizer.step(loss_factory)
+                loss = loss_info["critic_loss"]
+            self._critic_optimizer.step(loss)
 
             torch_util.add_torch_dict(loss_info, info)
         
@@ -206,12 +204,10 @@ class AWRAgent(base_agent.BaseAgent):
 
         for i in range(num_steps):
             batch = self._exp_buffer.sample(batch_size)
-            loss_info = None
-            def loss_factory():
-                nonlocal loss_info
+            with torch.amp.autocast(device_type="cuda", enabled=self._use_mixed_precision, dtype=torch.bfloat16):
                 loss_info = self._compute_actor_loss(batch)
-                return loss_info["actor_loss"]
-            self._actor_optimizer.step(loss_factory)
+                loss = loss_info["actor_loss"]
+            self._actor_optimizer.step(loss)
 
             torch_util.add_torch_dict(loss_info, info)
         
